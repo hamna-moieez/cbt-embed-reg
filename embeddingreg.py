@@ -157,7 +157,7 @@ class embedding(object):
                     #     output = self.external_embedding_layer(output)
 
                     if self.normalize:
-                        output = F.normalize(y1, p=2, dim=1)
+                        output = F.normalize(output, p=2, dim=1)
 
                     embeddings = output.cpu()
 
@@ -191,7 +191,7 @@ class embedding(object):
                         self.embeddings[0] = torch.cat((self.embeddings[0], embs.cpu()), 0)
                         self.embeddings_images[0] = \
                         [torch.cat((self.embeddings_images[0][0], y1.cpu()), 0), \
-                            torch.cat((self.embeddings_images[0][1], y1.cpu()), 0)]
+                            torch.cat((self.embeddings_images[0][1], y2.cpu()), 0)]
 
                     c = 1
                     # if self.weights_type is not None:
