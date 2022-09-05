@@ -289,6 +289,7 @@ def npy_loader(path):
   if path.endswith('.npy'):
     sample = np.load(path)
     sample = np.transpose(sample, (1,2,0))
+    sample = sample.astype(np.uint8)
     sample = Image.fromarray(sample)
   else:
     sample = Image.open(path)
