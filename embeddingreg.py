@@ -149,7 +149,7 @@ class embedding(object):
             embs = None
 
             with torch.no_grad():
-                for step, ((y1, y2), _) in enumerate(self.loader):
+                for step, ((y1, y2), _) in enumerate(self.dataset):
                     o_y1, o_y2 = self.model.embedding(y1.unsqueeze(0), y2.unsqueeze(0))
                     output = torch.cat((o_y1, o_y2), 0) # TODO: Change here if required, currently concatenated.
                     
