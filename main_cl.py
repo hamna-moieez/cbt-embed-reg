@@ -105,7 +105,7 @@ def main_worker(gpu, args):
     config.EPOCHS = 10
     config.IS_INCREMENTAL = True
     config.LR = 1e-1
-    config.BATCH_SIZE = 32
+    config.BATCH_SIZE = 64
     # config.EWC_IMPORTANCE = 0.5
     # config.EWC_SAMPLE_SIZE = 100
     # config.OPTIMIZER = 'Adam'
@@ -119,7 +119,7 @@ def main_worker(gpu, args):
     #                  'sample_size': 50, 'maxf': 0.001, 'c': 2, 'margin': 0.5}
 
     config.CL_PAR = {'penalty_importance': 8, 'weights_type': 'distance', 'sample_size': 20, 'distance': 'cosine',
-                     'supervised': True}
+                     'supervised': False}
 
     
     args.rank += gpu
@@ -190,7 +190,7 @@ def main_worker(gpu, args):
 
     start_time = time.time()
     scaler = torch.cuda.amp.GradScaler()
-    cont_learn_tec = embedding(model, loader, config)
+    cont_learn_tec = embedding(model, loader, config, gpu)
 
     for epoch in range(start_epoch, args.epochs):
         sampler.set_epoch(epoch)
@@ -216,8 +216,10 @@ def main_worker(gpu, args):
             if cont_learn_tec is not None:
                 # embedding regularizer -- compute penalty and add it.
                 _, penalty = cont_learn_tec(current_task=args.EWC_task_count, batch=(y1, y2))
+                # print("penalty: ", penalty)
                 if penalty != 0:
                     loss = loss + penalty
+                    print(f"Epoch: {epoch} | Loss with ER: {loss.detach()}")
                     scaler.scale(loss).backward(retain_graph=True)
 
             scaler.step(optimizer)
@@ -289,7 +291,6 @@ def npy_loader(path):
   if path.endswith('.npy'):
     sample = np.load(path)
     sample = np.transpose(sample, (1,2,0))
-    sample = sample.astype(np.uint8)
     sample = Image.fromarray(sample)
   else:
     sample = Image.open(path)
