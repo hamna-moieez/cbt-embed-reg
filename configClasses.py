@@ -9,8 +9,8 @@ class DefaultConfig(object):
 
     ITERS = 1
     EPOCHS = 2
-    BATCH_SIZE = 64
-    IS_CONVOLUTIONAL = True
+    # BATCH_SIZE = 64
+    IS_CONVOLUTIONAL = False
 
     NEXT_TASK_LR = None
     NEXT_TASK_EPOCHS = None
@@ -20,7 +20,15 @@ class DefaultConfig(object):
     USE_CL = True
 
     CL_TEC = embedding
-    CL_PAR = {'sample_size': 250, 'penalty_importance': 1e+3}
+    CL_PAR = {'penalty_importance': 8, 
+            'weights_type': 'distance', 
+            'sample_size': 20, 
+            'distance': 'euclidean',
+            'supervised': False, 
+            'memorized_task_size': 300,
+            'normalize': True, 
+            'online': False, 
+            }
 
     USE_TENSORBOARD = True
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")

@@ -29,6 +29,7 @@ import utils
 from embeddingreg import embedding
 from sampleconfig import config
 from configClasses import DefaultConfig, Embedding
+# from torch.utils.tensorboard import SummaryWriter
 
 parser = argparse.ArgumentParser(description='Barlow Twins Training')
 parser.add_argument('data', type=Path, metavar='DIR',
@@ -57,16 +58,17 @@ parser.add_argument('--checkpoint-dir', default='./checkpoint/', type=Path,
                     metavar='DIR', help='path to checkpoint directory')
 parser.add_argument('--dist_train', default=False, type=bool,
                     metavar='DD', help='choose if distributed training')
-parser.add_argument('--EWC_task_count', default=0, type=int,
-                    metavar='EWC_task_count', help='write which continual task it is')
+parser.add_argument('--ER_task_count', default=0, type=int,
+                    metavar='ER_task_count', help='write which continual task it is')
 parser.add_argument('--diz', default='./checkpoint/diz.npy', type=Path,
-                    metavar='DIZ', help='dict with fisher and previous task infos')
+                    metavar='DIZ', help='dict with embeddings previous task infos')
 
+args = parser.parse_args()
 ewc = False # set this to false to stop EWC
+er = True if args.ER_task_count > 0 else False
 allowed_classes = None
 
 def main():
-    args = parser.parse_args()
     args.ngpus_per_node = torch.cuda.device_count()
     if args.dist_train:
       if 'SLURM_JOB_ID' in os.environ:
@@ -88,14 +90,14 @@ def main():
         args.rank = 0
         args.dist_url = 'tcp://localhost:58472'
         args.world_size = args.ngpus_per_node
-        args.EWC_task_count = args.EWC_task_count
+        args.ER_task_count = args.ER_task_count
     else:
         print("Single node dist training")
         # single-node distributed training
         args.rank = 0
         args.dist_url = 'tcp://localhost:58472'
         args.world_size = args.ngpus_per_node
-        args.EWC_task_count = args.EWC_task_count
+        args.ER_task_count = args.ER_task_count
     torch.multiprocessing.spawn(main_worker, (args,), args.ngpus_per_node)
 
 
@@ -105,7 +107,7 @@ def main_worker(gpu, args):
     config.EPOCHS = 10
     config.IS_INCREMENTAL = True
     config.LR = 1e-1
-    config.BATCH_SIZE = 64
+    # config.BATCH_SIZE = 64
     # config.EWC_IMPORTANCE = 0.5
     # config.EWC_SAMPLE_SIZE = 100
     # config.OPTIMIZER = 'Adam'
@@ -115,11 +117,7 @@ def main_worker(gpu, args):
     config.NEXT_TASK_LR = None
     config.NEXT_TASK_EPOCHS = None
 
-    # config.CL_PAR = {'penalty_importance': 1, 'memorized_task_size': 300, 'weights_type': 'usage',
-    #                  'sample_size': 50, 'maxf': 0.001, 'c': 2, 'margin': 0.5}
-
-    config.CL_PAR = {'penalty_importance': 8, 'weights_type': 'distance', 'sample_size': 20, 'distance': 'cosine',
-                     'supervised': False}
+    # writer = SummaryWriter()
 
     
     args.rank += gpu
@@ -137,9 +135,11 @@ def main_worker(gpu, args):
     torch.backends.cudnn.benchmark = True
 
     model = BarlowTwins(args).cuda(gpu)
-    if ewc:
-      model.EWC_task_count = args.EWC_task_count
-      print('EWC task count: ', model.EWC_task_count)
+
+    # if ewc:
+    if er:
+      model.ER_task_count = args.ER_task_count
+      print('ER task count: ', model.ER_task_count)
     model = nn.SyncBatchNorm.convert_sync_batchnorm(model)
     param_weights = []
     param_biases = []
@@ -154,25 +154,6 @@ def main_worker(gpu, args):
                      weight_decay_filter=True,
                      lars_adaptation_filter=True)
 
-    # automatically resume from checkpoint if it exists
-    if (args.checkpoint_dir / 'checkpoint.pth').is_file():
-        print('Loading checkpoints...')
-        ckpt = torch.load(args.checkpoint_dir / 'checkpoint.pth', map_location='cpu')
-        if args.EWC_task_count > 0:
-            start_epoch = 0
-            # with open(args.checkpoint_dir / args.diz, 'r') as JSON:
-            #     diz = json.load(JSON)
-            diz = np.load(args.checkpoint_dir / args.diz, allow_pickle = True)
-            model.module.get_info(diz, ewc_lambda = args.ewc_lambda)
-            print('EWC info correctly loaded!')
-        else:
-            start_epoch = ckpt['epoch']
-        model.load_state_dict(ckpt['model'])
-        optimizer.load_state_dict(ckpt['optimizer'])
-        print('Checkpoints loaded!')
-    else:
-        print('No checkpoints founded')
-        start_epoch = 0
 
     dataset = torchvision.datasets.DatasetFolder(
       root=args.data,
@@ -185,12 +166,35 @@ def main_worker(gpu, args):
     assert args.batch_size % args.world_size == 0
     per_device_batch_size = args.batch_size // args.world_size
     loader = torch.utils.data.DataLoader(
-        dataset, batch_size=per_device_batch_size, num_workers=args.workers,
+        dataset, batch_size=per_device_batch_size,
         pin_memory=True, sampler=sampler, drop_last=True)
+
+    cont_learn_tec = embedding(model, loader, config, gpu, per_device_batch_size)
+    
+
+    # automatically resume from checkpoint if it exists
+    if (args.checkpoint_dir / 'checkpoint.pth').is_file():
+        print('Loading checkpoints...')
+        ckpt = torch.load(args.checkpoint_dir / 'checkpoint.pth', map_location='cpu')
+        if args.ER_task_count > 0:
+            start_epoch = 0
+            # with open(args.checkpoint_dir / args.diz, 'r') as JSON:
+            #     diz = json.load(JSON)
+            diz = np.load(args.checkpoint_dir / args.diz, allow_pickle = True)
+            cont_learn_tec.get_info(diz)
+            
+            print('ER info correctly loaded!')
+        else:
+            start_epoch = ckpt['epoch']
+        model.load_state_dict(ckpt['model'])
+        optimizer.load_state_dict(ckpt['optimizer'])
+        print('Checkpoints loaded!')
+    else:
+        print('No checkpoints found')
+        start_epoch = 0
 
     start_time = time.time()
     scaler = torch.cuda.amp.GradScaler()
-    cont_learn_tec = embedding(model, loader, config, gpu)
 
     for epoch in range(start_epoch, args.epochs):
         sampler.set_epoch(epoch)
@@ -201,27 +205,29 @@ def main_worker(gpu, args):
             adjust_learning_rate(args, optimizer, loader, step)
             optimizer.zero_grad()
             with torch.cuda.amp.autocast():
-                loss = model.forward(y1, y2)
+                bt_loss = model.forward(y1, y2)
                 # if ewc:
                 #   loss, bt_loss, ewc_loss = loss
                 
-                # L1 regularize the loss
+                # L1 regularize the  barlow twins loss
                 if config.L1_REG > 0:
                     l1_loss = 0.0
                     for name, param in model.named_parameters():
                         l1_loss += torch.sum(abs(param))
-                    loss = loss + config.L1_REG * l1_loss
-            scaler.scale(loss).backward(retain_graph=True)
+                    bt_loss = bt_loss + config.L1_REG * l1_loss
+            scaler.scale(bt_loss).backward(retain_graph=True)
 
             if cont_learn_tec is not None:
                 # embedding regularizer -- compute penalty and add it.
-                _, penalty = cont_learn_tec(current_task=args.EWC_task_count, batch=(y1, y2))
-                # print("penalty: ", penalty)
-                if penalty != 0:
-                    loss = loss + penalty
-                    print(f"Epoch: {epoch} | Loss with ER: {loss.detach()}")
+                _, er_loss = cont_learn_tec(current_task=args.ER_task_count, batch=(y1, y2))
+                if er: 
+                    loss = bt_loss + er_loss
+                    # print(f"Epoch: {epoch} | Loss with ER: {loss.detach()} | penalty: {er_loss}")
+                    # writer.add_scalar("Loss with ER", loss.detach(), step)
                     scaler.scale(loss).backward(retain_graph=True)
-
+                else:
+                    loss = bt_loss
+            
             scaler.step(optimizer)
             scaler.update()
             if step % args.print_freq == 0:
@@ -232,9 +238,10 @@ def main_worker(gpu, args):
                                  loss=loss.item(),
                                  time=int(time.time() - start_time))
                     # if ewc:
-                    #     stats['EWC_loss'] = ewc_loss.item()
-                    #     stats['BT_loss'] = bt_loss.item()
-                    #     stats['EWC_task_count'] = model.module.EWC_task_count
+                    if er:
+                        stats['ER_loss'] = er_loss
+                        stats['BT_loss'] = bt_loss.item()
+                        stats['ER_task_count'] = model.module.ER_task_count
                         
                     print(json.dumps(stats))
                     print(json.dumps(stats), file=stats_file)
@@ -250,17 +257,19 @@ def main_worker(gpu, args):
     if args.rank == 0:
         # save final model
         # if ewc:
-        #     diz = {}
-        #     diz['fisher'], diz['prev_task'] = model.module.estimate_fisher(dataset)
-        #     # with open(args.checkpoint_dir / f'ewc_info{args.EWC_task_count+1}.json', 'w') as fp:
-        #     #      json.dump(diz, fp)
-        #     np.save(args.checkpoint_dir / f'ewc_info{args.EWC_task_count+1}.npy', diz)
-        #     print('EWC task count: ', model.module.EWC_task_count)
-        #     print('Fisher computed')
+        if er:
+            diz = {}
+            embeddings, embeddings_images = cont_learn_tec.get_embeddings()
+            diz['embeddings'], diz['embeddings_images'] = embeddings, embeddings_images
+            # with open(args.checkpoint_dir / f'er_info{args.ER_task_count+1}.json', 'w') as fp:
+            #      json.dump(diz, fp)
+            np.save(args.checkpoint_dir / f'er_info{args.ER_task_count+1}.npy', diz)
+            print('ER task count: ', model.module.ER_task_count)
+            print('Embeddings computed')
         state = dict(epoch=final_epoch, model=model.state_dict(), optimizer=optimizer.state_dict())
         torch.save(state, args.checkpoint_dir / 'checkpoint.pth')
-        torch.save(model.module.backbone.state_dict(),args.checkpoint_dir / 'resnet50_task{}.pth'.format(args.EWC_task_count))
-
+        torch.save(model.module.backbone.state_dict(),args.checkpoint_dir / 'resnet50_task{}.pth'.format(args.ER_task_count))
+        # writer.close()
 
 def adjust_learning_rate(args, optimizer, loader, step):
     max_steps = args.epochs * len(loader)
@@ -290,7 +299,11 @@ def npy_loader(path):
   # sample = torch.from_numpy(np.load(path))
   if path.endswith('.npy'):
     sample = np.load(path)
-    sample = np.transpose(sample, (1,2,0))
+    # print(path)
+    if 'Potsdam' in path:
+        sample = np.transpose(sample, (1,2,0))
+    # print("shape: ", sample.shape)
+    sample = sample.astype(np.uint8)
     sample = Image.fromarray(sample)
   else:
     sample = Image.open(path)

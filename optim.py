@@ -47,8 +47,8 @@ class LARS(optim.Optimizer):
                     dp = dp.add(p, alpha=g['weight_decay'])
 
                 if not g['lars_adaptation_filter'] or not self.exclude_bias_and_norm(p):
-                    param_norm = torch.norm(p)
-                    update_norm = torch.norm(dp)
+                    param_norm = torch.linalg.norm(p)
+                    update_norm = torch.linalg.norm(dp)
                     one = torch.ones_like(param_norm)
                     q = torch.where(param_norm > 0.,
                                     torch.where(update_norm > 0,

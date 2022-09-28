@@ -6,7 +6,7 @@ import random
 import torch.nn.functional as F 
 
 class embedding(object):
-    def __init__(self, model: AbstractNetwork, dataset: GeneralDatasetLoader, config, gpu):
+    def __init__(self, model: AbstractNetwork, dataset: GeneralDatasetLoader, config, gpu, batch_size):
 
         self.model = model
         self.dataset = dataset
@@ -14,19 +14,19 @@ class embedding(object):
 
         self.is_conv = config.IS_CONVOLUTIONAL
         self.device = config.DEVICE
-        self.batch_size = config.BATCH_SIZE
+        self.batch_size = batch_size
         self.first_batch = True
         self.incremental = config.IS_INCREMENTAL
         self.handle = None
 
-        self.sample_size = config.CL_PAR.get('sample_size', 25)
-        self.memorized_task_size = config.CL_PAR.get('memorized_task_size', 300)
-        self.importance = config.CL_PAR.get('penalty_importance', 1)
+        self.sample_size = config.CL_PAR.get('sample_size')
+        self.memorized_task_size = config.CL_PAR.get('memorized_task_size')
+        self.importance = config.CL_PAR.get('penalty_importance')
         self.c = config.CL_PAR.get('c', 1)
         self.distance = config.CL_PAR.get('distance', 'euclidean')
         self.supervised = config.CL_PAR.get('supervised', False)
         self.normalize = config.CL_PAR.get('normalize', True)
-        self.mul = config.CL_PAR.get('normalize', 1)
+        self.mul = config.CL_PAR.get('mul', 1)
 
         self.online = config.CL_PAR.get('online', False)
         self.memory_size = config.CL_PAR.get('memory_size', -1)
@@ -38,12 +38,12 @@ class embedding(object):
         self.weights_type = config.CL_PAR.get('weights_type', None)
 
         if self.weights_type == 'image_similarity':
-            img_size = dataset[0][0].size()
+            # img_size = self.dataset[0][0].size()
             if self.is_conv:
                 pass
             else:
                 self.encoder = torch.nn.Sequential(
-                    torch.nn.Linear(28*28, 300),
+                    torch.nn.Linear(224*224*3, 300),
                     torch.nn.ReLU(),
                     torch.nn.Linear(300, 200),
                     torch.nn.ReLU(),
@@ -112,12 +112,19 @@ class embedding(object):
             self.batch_count += 1
             self.embedding_save(current_task)
 
-            if not self.first_batch:# and self.batch_count % self.c == 0:
-                penalty = self.embedding_drive(current_batch)
+            if current_task == 1:
+
+                if not self.first_batch:# and self.batch_count % self.c == 0:
+                    penalty = self.embedding_drive(current_batch)
+                else:
+                    self.first_batch = False
             else:
-                self.first_batch = False
+                penalty = self.embedding_drive(current_batch)
 
         return self, penalty
+
+    def get_embeddings(self):
+        return self.embeddings[0].cpu().detach().numpy(), self.embeddings_images[0].cpu().detach().numpy()
 
     def embedding_save(self, current_task):
 
@@ -200,14 +207,14 @@ class embedding(object):
                         self.embeddings[0] = torch.cat((self.embeddings[0], embs.cpu()), 0)
                         self.embeddings_images[0] = torch.cat((self.embeddings_images[0], images.cpu()), 0)
 
+
                     c = 1
                     # if self.weights_type is not None:
                     #     if self.weights_type == 'distance':
                     #         c = 0.1
 
                     # self.w[0] = [c] * self.embeddings[0].size()[0]
-                    self.w[0] = [c] * 32
-
+                    self.w[0] = [c] * self.batch_size
 
                 # if self.embeddings is None or self.online:
                 #     self.embeddings = embeddings
@@ -247,6 +254,9 @@ class embedding(object):
                 ss = self.sample_size
             else:
                 ss = self.sample_size * len(self.tasks)
+            
+            # print("idx: ", idx)
+            # print("w: ", w)
 
             idx = random.choices(idx, k=ss, weights=w)
 
@@ -296,7 +306,10 @@ class embedding(object):
                     elif self.weights_type == 'image_similarity':
                         # compute images average again
                         current_batch_avg = torch.stack([current_batch[0], current_batch[1]]).mean(dim=0)
+                        current_batch_avg = torch.reshape(current_batch_avg, 
+                                            (-1, current_batch_avg.shape[1] * current_batch_avg.shape[2] * current_batch_avg.shape[3]))
                         current_images = self.encoder(current_batch_avg)
+                        img = torch.reshape(img, (-1, img.shape[1] * img.shape[2] * img.shape[3]))
                         old_images = self.encoder(img)
 
                         with torch.no_grad():
@@ -306,7 +319,7 @@ class embedding(object):
                             dist = (1 - dist.mean(dim=1)).cpu().numpy()
 
                         # for j, i in enumerate(idx):
-                        self.w[t][i] = dist
+                        self.w[t] = dist
 
             to_back = to_back.mean() * self.importance
             # print(to_back, torch.log(to_back))
@@ -316,3 +329,11 @@ class embedding(object):
 
         self.model.train()
         return to_back.item()
+
+    def get_info(self, diz):
+        self.embeddings[0] = (diz[()]['embeddings'])
+        self.embeddings[0] = torch.from_numpy(self.embeddings[0])
+        self.embeddings_images[0] = diz[()]['embeddings_images']
+        self.embeddings_images[0] = torch.from_numpy(self.embeddings_images[0])
+
+        # self.ewc_lambda = ewc_lambda
